@@ -205,7 +205,9 @@ void patch(){
 
 
 	hooks_module = PyImport_ImportModule("main");
+	PyErr_Print();
 	internal_module = PyImport_ImportModule("hook_internals");
+	PyErr_Print();
 	replaced_code_dict = PyDict_New();
 	if (!hooks_module || !internal_module | !replaced_code_dict) goto fail;
 
@@ -225,12 +227,16 @@ void patch(){
 
 		PyObject *key = PyList_GetItem(keys, i);
 		PyObject *val = PyDict_GetItem(hooks_dict, key);
-		if (!PyTuple_Check(val) || PyTuple_Size(val)<2){
-			printf("ignoring hook as it is not a mapping from an integer to a tuple of TODO\n");
+		if (!PyIndex_Check(key) || !PyTuple_Check(val)){
+			printf("Ignoring hook as it is not a mapping from an integer to a tuple\n");
 			continue;
 		}
 
 		void *addr = (void*)PyNumber_AsSsize_t(key, NULL);
+		if (PyTuple_Size(val)<2 || !PyIndex_Check(PyTuple_GetItem(val, 0)) || !PyCallable_Check(PyTuple_GetItem(val, 1))) {
+			printf("Ignoring hook at 0x%08x as it does not specify an end address and a function\n", addr);
+		}
+
 		void * endadr = (void*)PyNumber_AsSsize_t(PyTuple_GetItem(val, 0), NULL);
 		int ilen = endadr-addr;
 
