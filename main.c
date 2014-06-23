@@ -102,6 +102,9 @@ void **replaced_code_dict_ptr = NULL;
 long page = 0;
 
 void on_hook_c(void *rsp){
+	struct timeval t0, t1;
+	gettimeofday(&t0, 0);
+
 	void *stack = rsp-16;
 	void **called_from = stack+152;
 
@@ -140,6 +143,11 @@ void on_hook_c(void *rsp){
 	Py_DECREF(registers_tuple);
 
 	*replaced_code_dict_ptr = PyLong_AsVoidPtr(PyDict_GetItem(replaced_code_dict, key));
+	PyErr_Print();
+
+	gettimeofday(&t1, 0);
+	long elapsed = (t1.tv_sec-t0.tv_sec)*1000000 + t1.tv_usec-t0.tv_usec;
+	printf("C/Python hook took %fms\n", elapsed/1000.0);
 }
 
 int text_copy(void *dest, void *source, const size_t length)
