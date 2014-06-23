@@ -234,15 +234,12 @@ void patch(){
 		void * endadr = (void*)PyNumber_AsSsize_t(PyTuple_GetItem(val, 0), NULL);
 		int ilen = endadr-addr;
 
-		if (ilen < 5){
-			printf("There is not enough space between 0x%08x and 0x%08x to inject a jump/call\n", addr, endadr);
-		}
 		PyObject *func = PyTuple_GetItem(val, 1);
 
-		/*if (!PyIndex_Check(key) || !PyCallable_Check(func)){
-			printf("ignoring hook as it is not a mapping from an integer to a callable\n");
+		if (ilen < 7){
+			printf("There is not enough space between 0x%08x and 0x%08x to inject a call. At least 7 bytes are needed\n", addr, endadr);
 			continue;
-		}*/
+		}
 
 		printf("Injecting hook at 0x%08x to call ", addr);
 		PyObject_Print(val, stdout, 0);
