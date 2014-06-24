@@ -1,7 +1,4 @@
 /*
-
-
-
 Making the shared object:
 
 nasm main.asm -f elf64 -shared -o main.o
@@ -17,10 +14,6 @@ gcc -I/usr/include/python3.4m -I/usr/include/python3.4m -march=x86-64 -mtune=gen
 -pipe -fstack-protector-strong --param=ssp-buffer-size=4 -DDYNAMIC_ANNOTATIONS_ENABLED=1 \
 -DNDEBUG -g -fwrapv -L/usr/lib -lpthread -ldl  -lutil -lm  -lpython3.4m -Xlinker \
 -export-dynamic -g -std=c11 -masm=intel -fPIC main.o main.c
-
-
-
-
 
 */
 
@@ -108,7 +101,7 @@ void on_hook_c(void *rsp){
 	void *stack = rsp-16;
 	void **called_from = stack+152;
 
-	printf("0x%08x hooked\n", called_from);
+	printf("* 0x%08x hooked\n", called_from);
 	PyObject *key = PyLong_FromVoidPtr(*called_from-7);
 
 	PyObject *registers_tuple = PyTuple_New(17);
@@ -147,7 +140,7 @@ void on_hook_c(void *rsp){
 
 	gettimeofday(&t1, 0);
 	long elapsed = (t1.tv_sec-t0.tv_sec)*1000000 + t1.tv_usec-t0.tv_usec;
-	printf("C/Python hook took %fms\n", elapsed/1000.0);
+	printf("* C/Python hook took %fms\n", elapsed/1000.0);
 }
 
 int text_copy(void *dest, void *source, const size_t length)

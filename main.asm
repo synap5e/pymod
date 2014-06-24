@@ -1,7 +1,6 @@
 global on_hook_asm
 global spin_lock
 global spin_unlock
-extern exit
 
 ;section .data
 ;align 16
