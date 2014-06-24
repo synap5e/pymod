@@ -72,23 +72,40 @@ class Memory:
         cbytes = ctypes.create_string_buffer(bytes)
         ctypes.memmove(start, ctypes.addressof(cbytes), len(bytes))
 
+    def get(self, addr, fmt):
+        size = struct.calcsize(fmt)
+        return struct.unpack(fmt, ctypes.string_at(addr, size))
+
+    def get_single(self, addr, fmt):
+        return self.get(addr, fmt)[0]
+
+    def set(self, addr, values, fmt):
+        value_raw = struct.pack(fmt, *values)
+        value_buffer = ctypes.create_string_buffer(value_raw)
+        ctypes.memmove(addr, ctypes.addressof(value_buffer), len(value_raw))
+
+    def set_single(self, addr, value, fmt):
+        self.set(addr, (value,), fmt)
+
+    def set_ptr(self, addr, value):
+        self.set_single(addr, value, '@P')
+
+    def get_ptr(self, addr):
+        return self.get_single(addr, '@P')
+
+    def new_buffer(self, bytes, fmt=None):
+        if fmt:
+            bytes = struct.pack(fmt, *bytes)
+        string_buffer = ctypes.create_string_buffer(bytes)
+        addr = libc.malloc(len(bytes)+1)
+        ctypes.memmove(addr, ctypes.addressof(string_buffer), len(bytes)+1)
+        return addr
+
+    def free(self, addr):
+        return libc.free(addr)
+
 
 libc = ctypes.cdll.LoadLibrary('libc.so.6')
 memory = Memory()
 
-def get_long(addr):
-    return struct.unpack('<Q', ctypes.string_at(addr, 8))[0]
 
-def set_long(addr, value):
-    new_address_raw_bytes = struct.pack('<Q', value)
-    new_address_buffer = ctypes.create_string_buffer(new_address_raw_bytes)
-    ctypes.memmove(addr, ctypes.addressof(new_address_buffer), 8)
-
-def new_buffer(bytes):
-    string_buffer = ctypes.create_string_buffer(bytes)
-    addr = libc.malloc(len(bytes)+1)
-    ctypes.memmove(addr, ctypes.addressof(string_buffer), len(bytes)+1)
-    return addr
-
-def free(addr):
-    return libc.free(addr)
