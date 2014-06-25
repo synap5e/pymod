@@ -28,6 +28,15 @@ gcc -I/usr/include/python3.4m -I/usr/include/python3.4m -march=x86-64 -mtune=gen
 //#include <bits/fcntl.h>
 
 
+#if _WIN64 || __amd64__
+#define TARGET_64_BIT
+typedef unsigned long long vint;
+#else
+#define TARGET_32_BIT
+typedef unsigned int vint;
+#endif
+
+
 extern void on_hook_asm();
 extern void spin_lock();
 extern void spin_unlock();
@@ -91,51 +100,88 @@ PyObject *hooks_module, *internal_module;
 PyObject *hooks_dict, *replaced_code_dict;
 
 void *fpu = NULL;
-void **replaced_code_dict_ptr = NULL;
-long page = 0;
+void **replaced_code_ptr = NULL;
+void **saved_called_from;
+vint page = 0;
 
-void on_hook_c(void *rsp){
+void on_hook_c(void *sp){
 	struct timeval t0, t1;
 	gettimeofday(&t0, 0);
 
-	void *stack = rsp-16;
-	void **called_from = stack+152;
+	void *stack = sp-16;
+	#ifdef TARGET_32_BIT
+		void **called_from = stack+52;
+	#else
+		void **called_from = stack+152;
+	#endif
 
-	printf("* 0x%08x hooked\n", called_from);
-	PyObject *key = PyLong_FromVoidPtr(*called_from-7);
+	*saved_called_from = *called_from;
 
-	PyObject *registers_tuple = PyTuple_New(17);
+
 	int i=0;
-	for (int o=144;o>=16;o-=8){ // [flags, r15, r14 ... rax] are at [stack+144, stack+136, stack+128 ... stack+16]
-		long *saved = stack+o;
+	#ifdef TARGET_32_BIT
+	printf("* 0x%08x hooked\n", *called_from-6);
+	PyObject *key = PyLong_FromVoidPtr(*called_from-6);
+	PyObject *registers_tuple = PyTuple_New(9);
+	for (int o=48;o>=16;o-=4){ // [eflags, esp, ebp ... eax] are at [stack+40, stack+36, stack+32 ... stack+8]
+		vint *saved = stack+o;
 		PyTuple_SetItem(registers_tuple, i++, PyLong_FromUnsignedLong(*saved));
 	}
+	void* original = malloc(9*4);
+	memcpy(original, stack+16, 9*4);
+	#else
+	printf("* 0x%08x hooked\n", *called_from-7);
+	PyObject *key = PyLong_FromVoidPtr(*called_from-7);
+	PyObject *registers_tuple = PyTuple_New(17);
+	for (int o=144;o>=16;o-=8){ // [rflags, r15, r14 ... rax] are at [stack+144, stack+136, stack+128 ... stack+16]
+		vint *saved = stack+o;
+		PyTuple_SetItem(registers_tuple, i++, PyLong_FromUnsignedLongLong(*saved));
+	}
+	void* original = malloc(17*8);
+	memcpy(original, stack+16, 17*8);
+	#endif
 
 	PyObject *registers = PyObject_CallObject(PyObject_GetAttrString(internal_module, "Registers"), registers_tuple);
+	PyErr_Print();
 
 	PyObject *args = PyTuple_Pack(1, registers);
 	PyObject *ret = PyObject_CallObject(PyTuple_GetItem(PyDict_GetItem(hooks_dict, key), 1), args);
-	if (!ret) PyErr_Print();
 	Py_DECREF(args);
-	Py_DECREF(ret);
 
-	// restore registers from thing
+	if (ret){
+		Py_DECREF(ret);
 
-	PyObject *registers_list = PyObject_CallObject(PyObject_GetAttrString(registers, "values"), NULL);
-	if (!ret) PyErr_Print();
-	//PyObject_Print(registers_list, stdout, 0);
+		// restore registers from thing
+		printf("* Restoring modified register state\n");
+
+	} else {
+		printf("!! Error running python hook\n");
+		PyErr_Print();
+		printf("* Restoring original register state\n");
+	}
+
+	registers_tuple = PyObject_CallObject(PyObject_GetAttrString(registers, "values"), NULL);
 
 	i=0;
-	for (int o=144;o>=16;o-=8){
-		long *saved = stack+o;
-		PyObject *py_long = PyList_GetItem(registers_list, i++);
-		*saved = PyLong_AsUnsignedLong(py_long);
+	#ifdef TARGET_32_BIT
+	for (int o=48;o>=16;o-=4){
+		vint *saved = stack+o;
+		PyObject *py_long = PyTuple_GetItem(registers_tuple, i++);
+		*saved = PyLong_AsUnsignedLongLong(py_long);
 		Py_DECREF(py_long);
 	}
-	//registers_tuple(registers);
+	#else
+	for (int o=144;o>=16;o-=8){
+		vint *saved = stack+o;
+		PyObject *py_long = PyTuple_GetItem(registers_tuple, i++);
+		*saved = PyLong_AsUnsignedLongLong(py_long);
+		Py_DECREF(py_long);
+	}
+	#endif
+
 	Py_DECREF(registers_tuple);
 
-	*replaced_code_dict_ptr = PyLong_AsVoidPtr(PyDict_GetItem(replaced_code_dict, key));
+	*replaced_code_ptr = PyLong_AsVoidPtr(PyDict_GetItem(replaced_code_dict, key));
 	PyErr_Print();
 
 	gettimeofday(&t1, 0);
@@ -143,15 +189,15 @@ void on_hook_c(void *rsp){
 	printf("* C/Python hook took %fms\n", elapsed/1000.0);
 }
 
-int text_copy(void *dest, void *source, const size_t length)
+int text_copy(void *dest, void *source, size_t length)
 {
 	if (page==0)page = sysconf(_SC_PAGESIZE);
-	void  *start = (char *)dest - ((long)dest % page);
-	size_t memlen = length + (size_t)((long)dest % page);
+	void  *start = dest - ((vint)dest) % ((vint)page);
+	vint memlen = length + ((vint)dest) % ((vint)page);
 
 
 	if (memlen % (size_t)page)
-		memlen = memlen + (size_t)page - (memlen % (size_t)page);
+		memlen = memlen + (size_t)page - ((vint)memlen) % ((vint)page);
 
 	if (mprotect(start, memlen, PROT_READ | PROT_WRITE | PROT_EXEC))
 		return errno;
@@ -164,31 +210,55 @@ int text_copy(void *dest, void *source, const size_t length)
 	return 0;
 }
 
+#ifdef TARGET_32_BIT
 void fix_asm(){
 	// To be PIC the assembly functions in main.asm require being patched to
 	// use variables that we malloc here
 
 	// update spin_lock and spin_unlock to use some bytes on the heap so it's PIC
-	void **m = malloc(8);
+	void **m = malloc(4);
 	*m = 0;
-	text_copy((void*)(*spin_lock + 9), &m, 4);
-	text_copy((void*)(*spin_unlock + 8), &m, 4);
+	text_copy((void*)(*spin_lock + 7), &m, 4);
+	text_copy((void*)(*spin_unlock + 7), &m, 4);
 
 	// same for saving the FPU state
 	fpu = malloc(108);
-	text_copy((void*)(*on_hook_asm + 11), &fpu, 4);
-	text_copy((void*)(*on_hook_asm + 78), &fpu, 4);
+	text_copy((void*)(*on_hook_asm + 14+3), &fpu, 4);
+	text_copy((void*)(*on_hook_asm + 31+2), &fpu, 4);
+
+	// connect the call to on_hook_c
+	m = malloc(4);
+	*m = *on_hook_c;
+	text_copy((void*)(*on_hook_asm + 22+2), &m, 4);
+
+	// connect the call to run the replaced code (via a pointer)
+	replaced_code_ptr = malloc(4);
+	text_copy((void*)(*on_hook_asm + 51+2), &replaced_code_ptr, 4);
+}
+#else
+void fix_asm(){
+
+	// update spin_lock and spin_unlock to use some bytes on the heap so it's PIC
+	void **m = malloc(8);
+	*m = 0;
+	text_copy((void*)(*spin_lock + 5+4), &m, 4);
+	text_copy((void*)(*spin_unlock + 5+4), &m, 4);
+
+	// same for saving the FPU state
+	fpu = malloc(108);
+	text_copy((void*)(*on_hook_asm + 30+4), &fpu, 4);
+	text_copy((void*)(*on_hook_asm + 48+3), &fpu, 4);
 
 	// connect the call to on_hook_c
 	m = malloc(8);
 	*m = *on_hook_c;
-	text_copy((void*)(*on_hook_asm + 46), &m, 4);
+	text_copy((void*)(*on_hook_asm + 41+3), &m, 4);
 
 	// connect the call to run the replaced code (via a pointer)
-	replaced_code_dict_ptr = malloc(8);
-	text_copy((void*)(*on_hook_asm + 92), &replaced_code_dict_ptr, 4);
+	replaced_code_ptr = malloc(8);
+	text_copy((void*)(*on_hook_asm + 85+3), &replaced_code_ptr, 4);
 }
-
+#endif
 void patch(){
 	printf("I have successfully infiltrated the process!\n");
 	fix_asm();
@@ -217,6 +287,7 @@ void patch(){
 
 	if (PyCallable_Check(hooks_dict)){
 		hooks_dict = PyObject_CallObject(hooks_dict, NULL);
+		PyErr_Print();
 	}
 	if (!hooks_dict || !PyDict_Check(hooks_dict)){
 		printf("Need a dictionary or function that returns a dictionary\n");
@@ -243,8 +314,12 @@ void patch(){
 
 		PyObject *func = PyTuple_GetItem(val, 1);
 
+		#ifdef TARGET_32_BIT
+		if (ilen < 6){
+		#else
 		if (ilen < 7){
-			printf("There is not enough space between 0x%08x and 0x%08x to inject a call. At least 7 bytes are needed\n", addr, endadr);
+		#endif
+			printf("There is not enough space between 0x%08x and 0x%08x to inject a call. At least 6 bytes are needed on 32bit and 7 bytes on 64bit\n", addr, endadr);
 			continue;
 		}
 
@@ -252,10 +327,21 @@ void patch(){
 		PyObject_Print(val, stdout, 0);
 		putchar('\n');
 
+
+		saved_called_from = malloc(8);
+		void **saved_called_from_ptr = malloc(8);
+		*saved_called_from_ptr = saved_called_from;
 		if (page==0)page = sysconf(_SC_PAGESIZE);
 		void* replaced = aligned_alloc(page, (ilen + 8) + page - ((ilen + 8) % page));
 		memcpy(replaced, addr, ilen);
-		memcpy(replaced+ilen, "\xc3", 1); // ret
+		#ifdef TARGET_32_BIT
+		memcpy(replaced+ilen, "\xff\x25", 2); // jmp dword ptr
+		memcpy(replaced+ilen+2, saved_called_from_ptr, 4); // [called_from]
+		#else
+		memcpy(replaced+ilen, "\xff\x24\x25", 3); // jmp qword ptr
+		memcpy(replaced+ilen+3, saved_called_from_ptr, 8); // [called_from]
+		#endif
+		free(saved_called_from_ptr);
 		mprotect(replaced, ilen+1, PROT_READ | PROT_EXEC);
 
 		PyDict_SetItem(replaced_code_dict, PyLong_FromVoidPtr(addr), PyLong_FromVoidPtr(replaced));
@@ -265,18 +351,24 @@ void patch(){
 		*on_hook_asm_ptr = *on_hook_asm;
 
 		void *new_call = malloc(ilen);
-		memcpy(new_call, "\xff\x14\x25", 3); // call
-		memcpy(new_call+3, &on_hook_asm_ptr, 4); // qword ptr[*on_hook_asm_ptr]
+		#ifdef TARGET_32_BIT
+		memcpy(new_call, "\xff\x15", 2); // call dword ptr
+		memcpy(new_call+2, &on_hook_asm_ptr, 4); // [on_hook_asm_ptr]
+		memset(new_call+6, 0x90, ilen-6); // nop
+		#else
+		memcpy(new_call, "\xff\x14\x25", 3); // call qword ptr
+		memcpy(new_call+3, &on_hook_asm_ptr, 4); // [on_hook_asm_ptr]
 		memset(new_call+7, 0x90, ilen-7); // nop
+		#endif
 		text_copy(addr, new_call, ilen);
 
 	}
 	Py_DECREF(keys);
 
-	/*PyObject_Print(hooks_dict, stdout, 0);
+	PyObject_Print(hooks_dict, stdout, 0);
 	putchar('\n');
 	PyObject_Print(replaced_code_dict, stdout, 0);
-	putchar('\n');*/
+	putchar('\n');
 
 	return;
 
@@ -286,9 +378,10 @@ void patch(){
 		exit(-1);
 
 }
-
+/*
 void main(){
 	//_malloc = (void *(*)(size_t size)) dlsym(RTLD_NEXT, "malloc");
 	patch();
 	on_hook_asm();
 }
+*/

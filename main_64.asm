@@ -15,14 +15,14 @@ section .text
 
 ; TODO a better form of synchronization
 spin_lock:
-	mov 	eax, 1 			; Set the EAX register to 1.
+	mov 	rax, 1 			; Set the EAX register to 1.
 
 	xchg    rax, [-1]		; Atomically swap the EAX register with
 							;  the lock variable.
 							; This will always store 1 to the lock, leaving
 							;  previous value in the EAX register.
 
-	test 	eax, eax 		; Test EAX with itself. Among other things, this will
+	test 	rax, rax 		; Test EAX with itself. Among other things, this will
 							;  set the processor's Zero Flag if EAX is 0.
 							; If EAX is 0, then the lock was unlocked and
 							;  we just locked it.
@@ -36,24 +36,17 @@ spin_lock:
 							;  function.
 
 spin_unlock:
-	mov 	eax, 0 			; Set the EAX register to 0.
+	mov 	rax, 0 			; Set the EAX register to 0.
 
-	xchg    eax, [-1]		; Atomically swap the EAX register with
+	xchg    rax, [-1]		; Atomically swap the EAX register with
 							;  the lock variable.
 
 	ret						; The lock has been released.
 
-bad:
-	int 3
-
 on_hook_asm:
 	;int 3
-	push rax
-	call spin_lock
-	pop rax
 
-	fsave [-1]
-
+	push rsp
 	push rax
 	push rbx
 	push rcx
@@ -61,7 +54,6 @@ on_hook_asm:
 	push rsi
 	push rdi
 	push rbp
-	push rsp
 	push r8
 	push r9
 	push r10
@@ -72,8 +64,14 @@ on_hook_asm:
 	push r15
 	pushfq
 
+	call spin_lock
+	fsave [-1]
+
 	mov rdi, rsp
 	call [-1] ; call on_hook_c
+
+	frstor [-1]
+	call spin_unlock
 
 	popfq
 	pop r15
@@ -84,7 +82,6 @@ on_hook_asm:
 	pop r10
 	pop r9
 	pop r8
-	pop rsp
 	pop rbp
 	pop rdi
 	pop rsi
@@ -92,13 +89,6 @@ on_hook_asm:
 	pop rcx
 	pop rbx
 	pop rax
+	pop rsp
 
-	frstor [-1]
-
-	; TODO move this to after the call
-	push rax
-	call spin_unlock
-	pop rax
-
-	call [-1]
-	ret
+	jmp [-1]

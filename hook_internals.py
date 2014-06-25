@@ -1,12 +1,20 @@
 import ctypes, struct, re
 from collections import OrderedDict, namedtuple
 
+is_32bit = struct.calcsize('P') == 4
+
+reg32 = ['esp', 'eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'eflags']
+reg64 = ['rsp', 'rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15', 'rflags']
+
 class Registers(OrderedDict):
-    __register_names = ['rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'rsp', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15', 'eflags']
+    __register_names = reg32 if is_32bit else reg64
 
     def __init__(self, *args):
         super(Registers, self).__init__(zip(self.__register_names, args))
-        self.__initialized = True
+        if is_32bit:
+            self.esp += 4
+        else:
+            self.rsp += 8
 
     def __getattr__(self, name):
         try:
@@ -30,7 +38,7 @@ class Registers(OrderedDict):
     __repr__ = __str__
 
     def values(self):
-        return list(super(Registers, self).values())
+        return tuple(super(Registers, self).values())
 
 class Memory:
     def __init__(self):

@@ -39,7 +39,6 @@ int main(){
 		for (y=0;y<5;y++)
 			printf("%d, %d, ", spam[y], (*peggs)[y]);
 		putchar('\n');
-		free(b);
 	}
 
 	puts(n);
