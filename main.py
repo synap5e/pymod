@@ -8,8 +8,8 @@ r = random.Random()
 
 class Mod1:
     call = 0
-    def f1(self, registers):
-        #import pdb; pdb.set_trace()
+    def f1(self, registers, hit_count):
+        import pdb; pdb.set_trace()
         #print (registers)
 
         if is_32bit:
@@ -74,7 +74,7 @@ class Mod1:
             # cause a div by 0 and see if the program still works
             print(1/0)
 
-def f2(registers):
+def f2(registers, hit_count):
     print (registers)
 
 def hooks():
@@ -85,7 +85,7 @@ def hooks():
 
     hooks64 = {
         0x400758 : (0x400762, f2),
-        0x4007f4 : (0x400805, Mod1().f1),
+        0x4007f4 : (0x400805, Mod1().f1, 2),
     }
     hooks32 = {
         0x8048634 : (0x8048644, Mod1().f1),

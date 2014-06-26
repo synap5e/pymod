@@ -1,19 +1,11 @@
 /*
 Making the shared object:
 
-nasm main.asm -f elf64 -shared -o main.o
-gcc -I/usr/include/python3.4m -I/usr/include/python3.4m -march=x86-64 -mtune=generic -O2 \
--pipe -fstack-protector-strong --param=ssp-buffer-size=4 -DDYNAMIC_ANNOTATIONS_ENABLED=1 \
--DNDEBUG -g -fwrapv -L/usr/lib -lpthread -ldl -lutil -lm  -lpython3.4m -Xlinker \
--export-dynamic -g -std=c11 -masm=intel -fPIC  main.o main.c
+nasm main_32.asm -f elf32 -shared -o main.o;
+gcc -I/usr/include/python3.4m -L/usr/lib -lpthread -ldl -lutil -lm -lpython3.4m -std=c11 -masm=intel -fPIC -shared -O2 -m32 main.o main.c -o mod32.so
 
-
-Making the a.out (for testing)
-nasm main.asm -f elf64 -shared -o main.o
-gcc -I/usr/include/python3.4m -I/usr/include/python3.4m -march=x86-64 -mtune=generic -O0 \
--pipe -fstack-protector-strong --param=ssp-buffer-size=4 -DDYNAMIC_ANNOTATIONS_ENABLED=1 \
--DNDEBUG -g -fwrapv -L/usr/lib -lpthread -ldl  -lutil -lm  -lpython3.4m -Xlinker \
--export-dynamic -g -std=c11 -masm=intel -fPIC main.o main.c
+nasm main_64.asm -f elf64 -shared -o main.o;
+gcc -I/usr/include/python3.4m -L/usr/lib -lpthread -ldl  -lutil -lm  -lpython3.4m -std=c11 -masm=intel -fPIC -shared -O2 main.o main.c -o mod64.so
 
 */
 
@@ -117,72 +109,90 @@ void on_hook_c(void *sp){
 
 	*saved_called_from = *called_from;
 
-
-	int i=0;
 	#ifdef TARGET_32_BIT
 	printf("* 0x%08x hooked\n", *called_from-6);
 	PyObject *key = PyLong_FromVoidPtr(*called_from-6);
-	PyObject *registers_tuple = PyTuple_New(9);
-	for (int o=48;o>=16;o-=4){ // [eflags, esp, ebp ... eax] are at [stack+40, stack+36, stack+32 ... stack+8]
-		vint *saved = stack+o;
-		PyTuple_SetItem(registers_tuple, i++, PyLong_FromUnsignedLong(*saved));
-	}
-	void* original = malloc(9*4);
-	memcpy(original, stack+16, 9*4);
 	#else
 	printf("* 0x%08x hooked\n", *called_from-7);
 	PyObject *key = PyLong_FromVoidPtr(*called_from-7);
-	PyObject *registers_tuple = PyTuple_New(17);
-	for (int o=144;o>=16;o-=8){ // [rflags, r15, r14 ... rax] are at [stack+144, stack+136, stack+128 ... stack+16]
-		vint *saved = stack+o;
-		PyTuple_SetItem(registers_tuple, i++, PyLong_FromUnsignedLongLong(*saved));
-	}
-	void* original = malloc(17*8);
-	memcpy(original, stack+16, 17*8);
 	#endif
+	PyObject *value = PyDict_GetItem(replaced_code_dict, key);
 
-	PyObject *registers = PyObject_CallObject(PyObject_GetAttrString(internal_module, "Registers"), registers_tuple);
-	PyErr_Print();
+	long iter = PyLong_AsLong(PyList_GetItem(value, 2));
+	PyList_SetItem(value, 2, PyLong_FromLong(iter+1));
+	int skip = iter % PyLong_AsLong(PyList_GetItem(value, 1));
+	printf("# %d %d\n", iter, skip);
 
-	PyObject *args = PyTuple_Pack(1, registers);
-	PyObject *ret = PyObject_CallObject(PyTuple_GetItem(PyDict_GetItem(hooks_dict, key), 1), args);
-	Py_DECREF(args);
+	if (!skip){
+		printf("* running python hook\n");
 
-	if (ret){
-		Py_DECREF(ret);
+		int i=0;
+		#ifdef TARGET_32_BIT
+		PyObject *registers_tuple = PyTuple_New(9);
+		for (int o=48;o>=16;o-=4){
+			vint *saved = stack+o;
+			PyTuple_SetItem(registers_tuple, i++, PyLong_FromUnsignedLong(*saved));
+		}
+		#else
+		PyObject *registers_tuple = PyTuple_New(17);
+		for (int o=144;o>=16;o-=8){
+			vint *saved = stack+o;
+			PyTuple_SetItem(registers_tuple, i++, PyLong_FromUnsignedLongLong(*saved));
+		}
+		#endif
 
-		// restore registers from thing
-		printf("* Restoring modified register state\n");
+		PyObject *registers = PyObject_CallObject(PyObject_GetAttrString(internal_module, "Registers"), registers_tuple);
+		PyErr_Print();
+
+		PyObject *args = PyTuple_Pack(2, registers, PyList_GetItem(value, 2));
+		PyObject *ret = PyObject_CallObject(PyTuple_GetItem(PyDict_GetItem(hooks_dict, key), 1), args);
+		Py_DECREF(args);
+
+		if (ret){
+			Py_DECREF(ret);
+
+			// restore registers from thing
+			printf("* Restoring modified register state\n");
+
+		} else {
+			printf("!! Error running python hook\n");
+			PyErr_Print();
+			printf("* Restoring original register state\n");
+		}
+
+		registers_tuple = PyObject_CallObject(PyObject_GetAttrString(registers, "values"), NULL);
+
+		i=0;
+		#ifdef TARGET_32_BIT
+		for (int o=48;o>=16;o-=4){
+			vint *saved = stack+o;
+			PyObject *py_long = PyTuple_GetItem(registers_tuple, i++);
+			*saved = PyLong_AsUnsignedLong(py_long);
+			Py_DECREF(py_long);
+		}
+		#else
+		for (int o=144;o>=16;o-=8){
+			vint *saved = stack+o;
+			PyObject *py_long = PyTuple_GetItem(registers_tuple, i++);
+			*saved = PyLong_AsUnsignedLongLong(py_long);
+			Py_DECREF(py_long);
+		}
+		#endif
+
+		Py_DECREF(registers_tuple);
 
 	} else {
-		printf("!! Error running python hook\n");
-		PyErr_Print();
-		printf("* Restoring original register state\n");
+		printf("* Not running hook this iteration\n");
+		#ifdef TARGET_32_BIT
+		*((vint*)(stack+48))+=4;
+		#else
+		*((vint*)(stack+144))+=8;
+		#endif
 	}
 
-	registers_tuple = PyObject_CallObject(PyObject_GetAttrString(registers, "values"), NULL);
-
-	i=0;
-	#ifdef TARGET_32_BIT
-	for (int o=48;o>=16;o-=4){
-		vint *saved = stack+o;
-		PyObject *py_long = PyTuple_GetItem(registers_tuple, i++);
-		*saved = PyLong_AsUnsignedLongLong(py_long);
-		Py_DECREF(py_long);
-	}
-	#else
-	for (int o=144;o>=16;o-=8){
-		vint *saved = stack+o;
-		PyObject *py_long = PyTuple_GetItem(registers_tuple, i++);
-		*saved = PyLong_AsUnsignedLongLong(py_long);
-		Py_DECREF(py_long);
-	}
-	#endif
-
-	Py_DECREF(registers_tuple);
-
-	*replaced_code_ptr = PyLong_AsVoidPtr(PyDict_GetItem(replaced_code_dict, key));
+	*replaced_code_ptr = PyLong_AsVoidPtr(PyList_GetItem(value, 0));
 	PyErr_Print();
+
 
 	gettimeofday(&t1, 0);
 	long elapsed = (t1.tv_sec-t0.tv_sec)*1000000 + t1.tv_usec-t0.tv_usec;
@@ -347,8 +357,15 @@ void patch(){
 		#endif
 		mprotect(replaced, ilen+1, PROT_READ | PROT_EXEC);
 
-		PyDict_SetItem(replaced_code_dict, PyLong_FromVoidPtr(addr), PyLong_FromVoidPtr(replaced));
-
+		PyObject *list = PyList_New(3);
+		PyList_SetItem(list, 0, PyLong_FromVoidPtr(replaced));
+		if (PyTuple_Size(val) == 3 && PyLong_Check(PyTuple_GetItem(val, 2))) {
+			PyList_SetItem(list, 1, PyTuple_GetItem(val, 2));
+		} else {
+			PyList_SetItem(list, 1, PyLong_FromLong(1));
+		}
+		PyList_SetItem(list, 2, PyLong_FromLong(0));
+		PyDict_SetItem(replaced_code_dict, PyLong_FromVoidPtr(addr), list);
 
 
 		void *new_call = malloc(ilen);
