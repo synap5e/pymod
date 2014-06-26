@@ -1,4 +1,4 @@
-import ctypes, struct, re
+import ctypes, struct, re, os
 from collections import OrderedDict, namedtuple
 
 is_32bit = struct.calcsize('P') == 4
@@ -11,6 +11,9 @@ class Registers(OrderedDict):
 
     def __init__(self, *args):
         super(Registers, self).__init__(zip(self.__register_names, args))
+
+        # because we got here with a call the sp pushed on in on_hook_asm is
+        # sizeof(void*) less than what it should be
         if is_32bit:
             self.esp += 4
         else:
@@ -42,22 +45,54 @@ class Registers(OrderedDict):
 
 class Memory:
     def __init__(self):
+        self.load_mappings()
+
+    def load_mappings(self):
         Mapping = namedtuple('Mapping', ['start', 'end', 'perms', 'offset', 'dev', 'inode', 'pathname'])
         self.mappings = []
+        self.modules = {}
         with open('/proc/self/maps') as f:
             for l in f.readlines():
                 data = re.split('\s+', l)
                 #print(data)
                 data += [''] * (6-len(data))
                 addr = data[0].split('-')
-                self.mappings.append(Mapping(
+                mem = Mapping(
                     int(addr[0], 16),
                     int(addr[1], 16),
                     data[1],
                     int(data[2], 16),
                     data[3],
                     int(data[4]),
-                    data[5]))
+                    data[5])
+                if mem.pathname and os.path.exists(mem.pathname):
+                    self.modules[os.path.basename(mem.pathname)] = mem
+                self.mappings.append(mem)
+
+    def search_map(self, bytes, mem, reload_maps=True):
+        if reload_maps:
+            self.load_mappings()
+        needle = ctypes.create_string_buffer(bytes)
+
+        return self.search(mem.start, mem.end)
+
+    def search(self, bytes, start, end):
+        while start < end:
+            found = ctypes.c_void_p(libc.memmem(ctypes.c_void_p(start), mem.end-start, ctypes.byref(needle), len(bytes))).value
+            if not found:
+                break
+            start = found+len(bytes)
+            yield found
+
+    def search_module(self, bytes, module_name, reload_maps=True):
+        if reload_maps:
+            self.load_mappings()
+        return search_map(bytes, self.modules[module_name], reload_maps=False)
+
+    def module_base(self, module_name, reload_maps=True):
+        if reload_maps:
+            self.load_mappings()
+        return self.modules[module_name].start
 
     def __getitem__(self, idx):
         if isinstance(idx, slice):
@@ -66,12 +101,13 @@ class Memory:
             return ctypes.string_at(idx.start, idx.stop-idx.start)
         else:
             return ctypes.string_at(idx, 1)
+
     def __setitem__(self, idx, bytes):
         if isinstance(idx, slice):
             if idx.step:
                 raise IndexError('step unsupported')
             if idx.stop-idx.start != len(bytes):
-                raise ValueError('slice length not equal value')
+                raise ValueError('slice length not equal to length of bytes to set')
             start = idx.start
         else:
             start = idx
