@@ -294,6 +294,13 @@ void patch(){
 		goto fail;
 	}
 
+	saved_called_from = malloc(8);
+	void **saved_called_from_ptr = malloc(8);
+	*saved_called_from_ptr = saved_called_from;
+
+	void **on_hook_asm_ptr = malloc(8);
+	*on_hook_asm_ptr = *on_hook_asm;
+
 	PyObject *keys = PyDict_Keys(hooks_dict);
 	for(Py_ssize_t i=0;i<PyList_Size(keys);i++){
 
@@ -328,9 +335,6 @@ void patch(){
 		putchar('\n');
 
 
-		saved_called_from = malloc(8);
-		void **saved_called_from_ptr = malloc(8);
-		*saved_called_from_ptr = saved_called_from;
 		if (page==0)page = sysconf(_SC_PAGESIZE);
 		void* replaced = aligned_alloc(page, (ilen + 8) + page - ((ilen + 8) % page));
 		memcpy(replaced, addr, ilen);
@@ -341,14 +345,11 @@ void patch(){
 		memcpy(replaced+ilen, "\xff\x24\x25", 3); // jmp qword ptr
 		memcpy(replaced+ilen+3, saved_called_from_ptr, 8); // [called_from]
 		#endif
-		free(saved_called_from_ptr);
 		mprotect(replaced, ilen+1, PROT_READ | PROT_EXEC);
 
 		PyDict_SetItem(replaced_code_dict, PyLong_FromVoidPtr(addr), PyLong_FromVoidPtr(replaced));
 
 
-		void **on_hook_asm_ptr = malloc(8);
-		*on_hook_asm_ptr = *on_hook_asm;
 
 		void *new_call = malloc(ilen);
 		#ifdef TARGET_32_BIT
@@ -364,6 +365,7 @@ void patch(){
 
 	}
 	Py_DECREF(keys);
+	free(saved_called_from_ptr);
 
 	PyObject_Print(hooks_dict, stdout, 0);
 	putchar('\n');

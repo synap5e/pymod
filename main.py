@@ -29,10 +29,6 @@ class Mod1:
             if tesa != -1:
                 memory[heap_mapping.start+tesa:heap_mapping.start+tesa+3] = b'O_o'
 
-            for a in memory.mappings:
-                if a.pathname == '[heap]':
-                    print(a)
-
         elif self.call == 2:
             memory.free(string_address) # the old string address is being overridden, making it dangling
             new_str_address = memory.new_buffer(b'Hello')
@@ -78,9 +74,17 @@ class Mod1:
             # cause a div by 0 and see if the program still works
             print(1/0)
 
+def f2(registers):
+    print (registers)
 
 def hooks():
+
+    for a in memory.mappings:
+        if a.pathname == '[heap]':
+            print(a)
+
     hooks64 = {
+        0x400758 : (0x400762, f2),
         0x4007f4 : (0x400805, Mod1().f1),
     }
     hooks32 = {
