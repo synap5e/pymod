@@ -72,13 +72,12 @@ class Memory:
     def search_map(self, bytes, mem, reload_maps=True):
         if reload_maps:
             self.load_mappings()
-        needle = ctypes.create_string_buffer(bytes)
-
-        return self.search(mem.start, mem.end)
+        return self.search(bytes, mem.start, mem.end)
 
     def search(self, bytes, start, end):
+        needle = ctypes.create_string_buffer(bytes)
         while start < end:
-            found = ctypes.c_void_p(libc.memmem(ctypes.c_void_p(start), mem.end-start, ctypes.byref(needle), len(bytes))).value
+            found = ctypes.c_void_p(libc.memmem(ctypes.c_void_p(start), end-start, ctypes.byref(needle), len(bytes))).value
             if not found:
                 break
             start = found+len(bytes)
