@@ -1,11 +1,22 @@
 /*
 Making the shared object:
 
-nasm main_32.asm -f elf32 -shared -o main.o;
-gcc -I/usr/include/python3.4m -L/usr/lib -lpthread -ldl -lutil -lm -lpython3.4m -std=c11 -masm=intel -fPIC -shared -O2 -m32 main.o main.c -o mod32.so
+lin32:
 
-nasm main_64.asm -f elf64 -shared -o main.o;
-gcc -I/usr/include/python3.4m -L/usr/lib -lpthread -ldl  -lutil -lm  -lpython3.4m -std=c11 -masm=intel -fPIC -shared -O2 main.o main.c -o mod64.so
+nasm main_32.asm -f elf32 -shared -o main.o
+gcc -I/usr/include/python3.4m -lpthread -ldl -lutil -lm -lpython3.4m -std=c11 -masm=intel -fPIC -shared -O2 -m32 main.o main.c -o mod_lin32.so
+
+
+lin64:
+
+nasm main_64.asm -f elf64 -shared -o main.o
+gcc -I/usr/include/python3.4m -lpthread -ldl  -lutil -lm -lpython3.4m -std=c11 -masm=intel -fPIC -shared -O2 main.o main.c -o mod_lin64.so
+
+
+win64:
+nasm main_64.asm -f win64 -shared -o main.obj
+x86_64-w64-mingw32-gcc -I/usr/x86_64-w64-mingw32/include/python34/ -std=c11 -masm=intel -shared main.c -c -o main.o
+x86_64-w64-mingw32-cc /usr/x86_64-w64-mingw32/lib/libpython34.dll.a main.obj main.o -lpython34 -o mod_win64.exe    # -shared   # for dll
 
 */
 
@@ -14,11 +25,30 @@ gcc -I/usr/include/python3.4m -L/usr/lib -lpthread -ldl  -lutil -lm  -lpython3.4
 
 #include <Python.h>
 #include <stdlib.h>
+
+#ifndef __MINGW32__
+
 #include <dlfcn.h>
 #include <sys/mman.h>
-//#include <unistd.h>
-//#include <bits/fcntl.h>
 
+#else
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+#define PROT_READ 1
+#define PROT_WRITE 2
+#define PROT_EXEC 4
+int mprotect(void *addr, size_t len, int prot){
+
+}
+void *aligned_alloc(size_t alignment, size_t size){
+
+}
+#define _SC_PAGESIZE 0
+long sysconf(int name){
+
+}
+#endif
 
 #if _WIN64 || __amd64__
 #define TARGET_64_BIT
@@ -38,6 +68,8 @@ void on_hook_c();
 int text_copy(void *target, void *source, const size_t length);
 void fix_asm();
 
+
+#ifndef __MINGW32__
 int (*_open)(const char * pathname, int flags, ...);
 //void *(*_malloc)(size_t size);
 
@@ -85,7 +117,7 @@ int open(const char * pathname, int flags, mode_t mode){
 	if (pathname == (char*)0xbadf00d) return 0;
 	return _open(pathname, flags, mode);
 }
-
+#endif
 
 
 PyObject *hooks_module, *internal_module;
@@ -397,10 +429,26 @@ void patch(){
 		exit(-1);
 
 }
-/*
-void main(){
-	//_malloc = (void *(*)(size_t size)) dlsym(RTLD_NEXT, "malloc");
-	patch();
-	on_hook_asm();
+
+#ifdef __MINGW32__
+
+void attach(){
+	MessageBox(
+		NULL,
+		"I have infiltrated the target process",
+		"Attached",
+		MB_ICONEXCLAMATION | MB_OK
+	);
 }
-*/
+
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
+{
+	if (ul_reason_for_call == DLL_PROCESS_ATTACH)
+	{
+		attach();
+	}
+
+}
+#endif
+
+
