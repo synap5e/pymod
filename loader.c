@@ -30,6 +30,58 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 		ResumeThread(process_info.hThread);
 		ResumeThread(thread);
+		CloseHandle(thread);
+
+		sleep(2);
+
+
+		int ModuleArraySize = 100;
+		HMODULE *ModuleArray = NULL;
+		DWORD NumModules = 0;
+
+		do {
+			if (ModuleArray){
+				ModuleArraySize *= 2;
+				free(ModuleArray);
+			}
+			ModuleArray = malloc(ModuleArraySize * sizeof(HMODULE));
+
+			EnumProcessModules(process_info.hProcess, ModuleArray, ModuleArraySize * sizeof(HMODULE), &NumModules);
+			NumModules /= sizeof(HMODULE);
+ 		} while (NumModules > ModuleArraySize);
+
+
+ 		CHAR ModuleNameBuffer[MAX_PATH] = {0};
+ 		HMODULE *module;
+ 		for(DWORD i = 0; i <= NumModules; ++i){
+
+			GetModuleBaseName(process_info.hProcess, ModuleArray[i], ModuleNameBuffer, sizeof(ModuleNameBuffer));
+
+			printf("%s\n", ModuleNameBuffer);
+
+			if (!strncmp(ModuleNameBuffer, DLL_NAME, sizeof(DLL_NAME))){
+				printf("GOTCHYA!\n");
+				module = ModuleArray[i];
+				break;
+			}
+		}
+		free(ModuleArray);
+
+
+		/*LPVOID a = GetProcAddress(module, "attach");
+		printf("%d\n", a);*/
+		printf("Starting %d+0x00024cf\n", module);
+		LPVOID attach = ((LPVOID)module)+9423;
+		printf("Starting %d\n", attach);
+
+		MessageBox(
+			NULL,
+			"Ready when you are!",
+			"Go?",
+			MB_ICONEXCLAMATION | MB_OK
+		);
+
+		thread = CreateRemoteThread(process_info.hProcess, NULL, NULL, (LPTHREAD_START_ROUTINE) attach, NULL, 0, NULL);
 
 		CloseHandle(process_info.hProcess);
 		// CloseHandle(process_info.hThread);
