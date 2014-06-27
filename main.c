@@ -3,20 +3,27 @@ Making the shared object:
 
 lin32:
 
-nasm main_32.asm -f elf32 -shared -o main.o
-gcc -I/usr/include/python3.4m -lpthread -ldl -lutil -lm -lpython3.4m -std=c11 -masm=intel -fPIC -shared -O2 -m32 main.o main.c -o mod_lin32.so
+nasm -f elf32 -shared trampoline_perilogue_32.asm -o trampoline_perilogue_32.o
+# from arch32 chroot
+gcc -I/usr/include/python3.4m -lpthread -ldl -lutil -lm -lpython3.4m -std=c11 -masm=intel -fPIC -shared -O2 trampoline_perilogue_32.o main.c -o mod_lin32.so
 
 
 lin64:
 
-nasm main_64.asm -f elf64 -shared -o main.o
-gcc -I/usr/include/python3.4m -lpthread -ldl  -lutil -lm -lpython3.4m -std=c11 -masm=intel -fPIC -shared -O2 main.o main.c -o mod_lin64.so
+nasm -f elf64 -shared trampoline_perilogue_64.asm -o trampoline_perilogue_64.o
+gcc -I/usr/include/python3.4m -lpthread -ldl  -lutil -lm -lpython3.4m -std=c11 -masm=intel -fPIC -shared -O2 trampoline_perilogue_64.o main.c -o mod_lin64.so
 
 
 win64:
-nasm main_64.asm -f win64 -shared -o main.obj
+
+nasm -f win64 -shared trampoline_perilogue_64.asm -o trampoline_perilogue_64.obj
 x86_64-w64-mingw32-gcc -I/usr/x86_64-w64-mingw32/include/python34/ -std=c11 -masm=intel -shared main.c -c -o main.o
-x86_64-w64-mingw32-cc /usr/x86_64-w64-mingw32/lib/libpython34.dll.a main.obj main.o -lpython34 -shared -o mod_win64.dll
+x86_64-w64-mingw32-cc /usr/x86_64-w64-mingw32/lib/libpython34.dll.a trampoline_perilogue_64.obj main.o -lpython34 -shared -o mod_win64.dll
+
+win32: (not working)
+nasm -f win32 -shared trampoline_perilogue_32.asm -o trampoline_perilogue_32.obj
+i686-w64-mingw32-gcc -I/usr/i686-w64-mingw32/include/python34/ -std=c11 -masm=intel -shared main.c -c -o main.o
+i686-w64-mingw32-cc /usr/i686-w64-mingw32/lib/libpython34.dll.a trampoline_perilogue_32.obj main.o -lpython34 -shared -o mod_win32.dll
 
 */
 
