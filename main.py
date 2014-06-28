@@ -9,7 +9,7 @@ r = random.Random()
 class Mod1:
     call = 0
     def f1(self, registers, hit_count):
-        import pdb; pdb.set_trace()
+        #import pdb; pdb.set_trace()
         #print (registers)
 
         if is_32bit:

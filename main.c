@@ -32,6 +32,7 @@ i686-w64-mingw32-cc /usr/i686-w64-mingw32/lib/libpython34.dll.a trampoline_peril
 
 #include <Python.h>
 #include <stdlib.h>
+#include <sys/time.h>
 
 #ifndef __MINGW32__
 
@@ -39,6 +40,7 @@ i686-w64-mingw32-cc /usr/i686-w64-mingw32/lib/libpython34.dll.a trampoline_peril
 #include <sys/mman.h>
 
 #else
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
@@ -55,16 +57,16 @@ void *aligned_alloc(size_t alignment, size_t size){
 long sysconf(int name){
 
 }
+
 #endif
 
 #if _WIN64 || __amd64__
 #define TARGET_64_BIT
-typedef unsigned long long vint;
+#define PyLong_AsUintptr_t(x) PyLong_AsUnsignedLongLong(x)
 #else
 #define TARGET_32_BIT
-typedef unsigned int vint;
+#define PyLong_AsUintptr_t(x) PyLong_AsUnsignedLong(x)
 #endif
-
 
 extern void on_hook_asm();
 extern void spin_lock();
@@ -133,7 +135,7 @@ PyObject *hooks_dict, *replaced_code_dict;
 void *fpu = NULL;
 void **replaced_code_ptr = NULL;
 void **saved_called_from;
-vint page = 0;
+uintptr_t page = 0;
 
 void on_hook_c(void *sp){
 	struct timeval t0, t1;
@@ -169,13 +171,13 @@ void on_hook_c(void *sp){
 		#ifdef TARGET_32_BIT
 		PyObject *registers_tuple = PyTuple_New(9);
 		for (int o=48;o>=16;o-=4){
-			vint *saved = stack+o;
+			uintptr_t *saved = stack+o;
 			PyTuple_SetItem(registers_tuple, i++, PyLong_FromUnsignedLong(*saved));
 		}
 		#else
 		PyObject *registers_tuple = PyTuple_New(17);
 		for (int o=144;o>=16;o-=8){
-			vint *saved = stack+o;
+			uintptr_t *saved = stack+o;
 			PyTuple_SetItem(registers_tuple, i++, PyLong_FromUnsignedLongLong(*saved));
 		}
 		#endif
@@ -204,16 +206,16 @@ void on_hook_c(void *sp){
 		i=0;
 		#ifdef TARGET_32_BIT
 		for (int o=48;o>=16;o-=4){
-			vint *saved = stack+o;
+			uintptr_t *saved = stack+o;
 			PyObject *py_long = PyTuple_GetItem(registers_tuple, i++);
-			*saved = PyLong_AsUnsignedLong(py_long);
+			*saved = PyLong_AsUintptr_t(py_long);
 			Py_DECREF(py_long);
 		}
 		#else
 		for (int o=144;o>=16;o-=8){
-			vint *saved = stack+o;
+			uintptr_t *saved = stack+o;
 			PyObject *py_long = PyTuple_GetItem(registers_tuple, i++);
-			*saved = PyLong_AsUnsignedLongLong(py_long);
+			*saved = PyLong_AsUintptr_t(py_long);
 			Py_DECREF(py_long);
 		}
 		#endif
@@ -223,9 +225,9 @@ void on_hook_c(void *sp){
 	} else {
 		printf("* Not running hook this iteration\n");
 		#ifdef TARGET_32_BIT
-		*((vint*)(stack+48))+=4;
+		*((uintptr_t*)(stack+48))+=4;
 		#else
-		*((vint*)(stack+144))+=8;
+		*((uintptr_t*)(stack+144))+=8;
 		#endif
 	}
 
@@ -241,12 +243,12 @@ void on_hook_c(void *sp){
 int text_copy(void *dest, void *source, size_t length)
 {
 	if (page==0)page = sysconf(_SC_PAGESIZE);
-	void  *start = dest - ((vint)dest) % ((vint)page);
-	vint memlen = length + ((vint)dest) % ((vint)page);
+	void  *start = dest - ((uintptr_t)dest) % ((uintptr_t)page);
+	uintptr_t memlen = length + ((uintptr_t)dest) % ((uintptr_t)page);
 
 
 	if (memlen % (size_t)page)
-		memlen = memlen + (size_t)page - ((vint)memlen) % ((vint)page);
+		memlen = memlen + (size_t)page - ((uintptr_t)memlen) % ((uintptr_t)page);
 
 	if (mprotect(start, memlen, PROT_READ | PROT_WRITE | PROT_EXEC))
 		return errno;
@@ -360,13 +362,14 @@ void patch(){
 			continue;
 		}
 
-		void *addr = (void*)PyNumber_AsSsize_t(key, NULL);
+		uintptr_t addr = PyLong_AsUintptr_t(key);
+
 		if (PyTuple_Size(val)<2 || !PyIndex_Check(PyTuple_GetItem(val, 0)) || !PyCallable_Check(PyTuple_GetItem(val, 1))) {
 			printf("Ignoring hook at 0x%08x as it does not specify an end address and a function\n", addr);
 		}
 
-		void * endadr = (void*)PyNumber_AsSsize_t(PyTuple_GetItem(val, 0), NULL);
-		int ilen = endadr-addr;
+		uintptr_t endadr = PyLong_AsUintptr_t(PyTuple_GetItem(val, 0));
+		uintptr_t ilen = endadr-addr;
 
 		PyObject *func = PyTuple_GetItem(val, 1);
 
@@ -386,7 +389,7 @@ void patch(){
 
 		if (page==0)page = sysconf(_SC_PAGESIZE);
 		void* replaced = aligned_alloc(page, (ilen + 8) + page - ((ilen + 8) % page));
-		memcpy(replaced, addr, ilen);
+		memcpy(replaced, (void*)addr, ilen);
 		#ifdef TARGET_32_BIT
 		memcpy(replaced+ilen, "\xff\x25", 2); // jmp dword ptr
 		memcpy(replaced+ilen+2, saved_called_from_ptr, 4); // [called_from]
@@ -397,14 +400,14 @@ void patch(){
 		mprotect(replaced, ilen+1, PROT_READ | PROT_EXEC);
 
 		PyObject *list = PyList_New(3);
-		PyList_SetItem(list, 0, PyLong_FromVoidPtr(replaced));
+		PyList_SetItem(list, 0, PyLong_FromVoidPtr((void*)replaced));
 		if (PyTuple_Size(val) == 3 && PyLong_Check(PyTuple_GetItem(val, 2))) {
 			PyList_SetItem(list, 1, PyTuple_GetItem(val, 2));
 		} else {
 			PyList_SetItem(list, 1, PyLong_FromLong(1));
 		}
 		PyList_SetItem(list, 2, PyLong_FromLong(0));
-		PyDict_SetItem(replaced_code_dict, PyLong_FromVoidPtr(addr), list);
+		PyDict_SetItem(replaced_code_dict, PyLong_FromVoidPtr((void*)addr), list);
 
 
 		void *new_call = malloc(ilen);
@@ -417,7 +420,7 @@ void patch(){
 		memcpy(new_call+3, &on_hook_asm_ptr, 4); // [on_hook_asm_ptr]
 		memset(new_call+7, 0x90, ilen-7); // nop
 		#endif
-		text_copy(addr, new_call, ilen);
+		text_copy((void*)addr, new_call, ilen);
 
 	}
 	Py_DECREF(keys);
