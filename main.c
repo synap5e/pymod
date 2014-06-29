@@ -33,6 +33,7 @@ i686-w64-mingw32-cc /usr/i686-w64-mingw32/lib/libpython34.dll.a trampoline_peril
 #include <Python.h>
 #include <stdlib.h>
 #include <sys/time.h>
+#include "trampoline_perilogue.h"
 
 #ifndef __MINGW32__
 
@@ -67,10 +68,6 @@ long sysconf(int name){
 #define TARGET_32_BIT
 #define PyLong_AsUintptr_t(x) PyLong_AsUnsignedLong(x)
 #endif
-
-extern void on_hook_asm();
-extern void spin_lock();
-extern void spin_unlock();
 
 void patch();
 void on_hook_c();
