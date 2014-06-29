@@ -4,12 +4,26 @@
 #include <psapi.h>
 #include <string.h>
 
-const char* DLL_NAME = "mod64.exe";
+#define BUFSIZE MAX_PATH*110
+
+const char* DLL_NAME = "mod_win64.dll";
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
 	STARTUPINFO startup_info;
 	PROCESS_INFORMATION process_info;
+
+	LPTSTR path = (LPTSTR) malloc(BUFSIZE*sizeof(TCHAR));;
+	LPTSTR temp = (LPTSTR) malloc(MAX_PATH*sizeof(TCHAR));;
+
+	GetEnvironmentVariable(TEXT("PATH"), path, MAX_PATH*100);
+	GetTempPath(MAX_PATH-20, temp);
+	strcat(temp, "pymod");
+	CreateDirectory(temp, NULL);
+
+	strcat(path, ";");
+	strcat(path, temp);
+	SetEnvironmentVariable(TEXT("PATH"), path);
 
 	memset(&startup_info, 0, sizeof(STARTUPINFO));
 	startup_info.cb = sizeof(startup_info);
@@ -21,7 +35,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 		WriteProcessMemory(process_info.hProcess, remote_string, DLL_NAME, strlen(DLL_NAME) + 1, NULL);
 
-		HANDLE thread = CreateRemoteThread(process_info.hProcess, NULL, NULL, (LPTHREAD_START_ROUTINE) load_library, remote_string, CREATE_SUSPENDED, NULL);
+		HANDLE thread = CreateRemoteThread(process_info.hProcess, NULL, 0, (LPTHREAD_START_ROUTINE) load_library, remote_string, CREATE_SUSPENDED, NULL);
 
 		if (thread == NULL)
 		{

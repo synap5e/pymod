@@ -82,6 +82,8 @@ void **replaced_code_ptr = NULL;
 void **saved_called_from;
 uintptr_t page = 0;
 
+char *ppath = NULL;
+
 void on_hook_c(void *sp){
 	struct timeval t0, t1;
 	gettimeofday(&t0, 0);
@@ -259,16 +261,30 @@ void patch(){
 	printf("I have successfully infiltrated the process!\n");
 	fix_asm();
 
-	Py_Initialize();
+	#ifdef __MINGW32__
+	Py_NoSiteFlag=1;
+	Py_SetPythonHome(L".");
+	#endif
+	Py_SetProgramName(L"pymod");
+	Py_InitializeEx(0);
 
 	PyObject *sys_path = PySys_GetObject("path");
 	if (sys_path == NULL || !PyList_Check(sys_path)) {
 		printf("No path!\n");
-		exit(-1);
+		sys_path = PyList_New(0);
+		PySys_SetObject("path",sys_path);
+		if (ppath){
+			printf("Adding %s to path!\n", ppath);
+			PyList_Insert(sys_path, 0, PyUnicode_FromString(ppath));
+			strcat(ppath, "\\python.zip");
+			printf("Adding %s to path!\n", ppath);
+			PyList_Insert(sys_path, 0, PyUnicode_FromString(ppath));
+		} else {
+			printf("Aborting\n");
+			exit(-1);
+		}
 	}
-	PyObject *path = PyUnicode_FromString(".");
-	PyList_Insert(sys_path, 0, path);
-	Py_DECREF(path);
+	PyList_Insert(sys_path, 0, PyUnicode_FromString("."));
 
 
 	hooks_module = PyImport_ImportModule("main");
@@ -391,6 +407,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 {
 	if (ul_reason_for_call == DLL_PROCESS_ATTACH)
 	{
+
+		LPTSTR temp = (LPTSTR) malloc(MAX_PATH*sizeof(TCHAR));;
+		GetTempPath(MAX_PATH-20, temp);
+		strcat(temp, "pymod");
+
+		ppath = malloc(MAX_PATH);
+		strncpy(ppath, temp, MAX_PATH-20);
+
+		strcat(temp, "\\python.zip");
+		SetEnvironmentVariable(TEXT("PYTHONPATH"), temp);
+
 		patch();
 	}
 

@@ -2,6 +2,7 @@ import ctypes, struct, re, os
 from collections import OrderedDict, namedtuple
 
 is_32bit = struct.calcsize('P') == 4
+is_windows = False
 
 reg32 = ['esp', 'eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'eflags']
 reg64 = ['rsp', 'rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15', 'rflags']
@@ -148,7 +149,12 @@ class Memory:
         return libc.free(addr)
 
 
-libc = ctypes.cdll.LoadLibrary('libc.so.6')
+try:
+    libc = ctypes.cdll.LoadLibrary('libc.so.6')
+except OSError:
+    is_windows = True
+    libc = ctypes.cdll.LoadLibrary('msvcrt.dll')
+
 memory = Memory()
 
 
