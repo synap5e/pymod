@@ -74,58 +74,6 @@ void on_hook_c();
 int text_copy(void *target, void *source, const size_t length);
 void fix_asm();
 
-
-#ifndef __MINGW32__
-int (*_open)(const char * pathname, int flags, ...);
-//void *(*_malloc)(size_t size);
-
-int (*_close)(int fildes);
-
-volatile int patched = 0;
-
-/*int close(int fildes){
-	printf("close(...)\n");
-	if (!patched){
-		_close = (int (*)(int fides)) dlsym(RTLD_NEXT, "close");
-		patched = 1;
-		main();
-	}
-	return _close(fildes);
-}*/
-
-/*void *malloc(size_t size){
-	if (!patched){
-		_malloc = (void *(*)(size_t size)) dlsym(RTLD_NEXT, "malloc");
-		patched = 1;
-		printf("malloc(...)\n");
-		patch();
-	}
-	return _malloc(size);
-}*/
-
-/*unsigned int sleep(unsigned int seconds){
-	if (!patched){
-		_sleep = (unsigned int (*)(unsigned int seconds)) dlsym(RTLD_NEXT, "sleep");
-		patched = 1;
-		printf("sleep(...)\n");
-		patch();
-	}
-	return _sleep(seconds);
-}
-*/
-int open(const char * pathname, int flags, mode_t mode){
-	if (!patched){
-		_open = (int (*)(const char * pathname, int flags, ...)) dlsym(RTLD_NEXT, "open");
-		patched = 1;
-		printf("open(...)\n");
-		patch();
-	}
-	if (pathname == (char*)0xbadf00d) return 0;
-	return _open(pathname, flags, mode);
-}
-#endif
-
-
 PyObject *hooks_module, *internal_module;
 PyObject *hooks_dict, *replaced_code_dict;
 
@@ -439,23 +387,41 @@ void patch(){
 
 #ifdef __MINGW32__
 
-void attach(){
-	MessageBox(
-		NULL,
-		"I have infiltrated the target process",
-		"Attached",
-		MB_ICONEXCLAMATION | MB_OK
-	);
-}
-
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
 {
 	if (ul_reason_for_call == DLL_PROCESS_ATTACH)
 	{
-		attach();
+		patch();
 	}
 
 }
+#else
+int (*_open)(const char * pathname, int flags, ...);
+//void *(*_malloc)(size_t size);
+
+volatile int patched = 0;
+
+/*void *malloc(size_t size){
+	if (!patched){
+		_malloc = (void *(*)(size_t size)) dlsym(RTLD_NEXT, "malloc");
+		patched = 1;
+		printf("malloc(...)\n");
+		patch();
+	}
+	return _malloc(size);
+}*/
+
+int open(const char * pathname, int flags, mode_t mode){
+	if (!patched){
+		_open = (int (*)(const char * pathname, int flags, ...)) dlsym(RTLD_NEXT, "open");
+		patched = 1;
+		printf("open(...)\n");
+		patch();
+	}
+	if (pathname == (char*)0xbadf00d) return 0;
+	return _open(pathname, flags, mode);
+}
+
 #endif
 
 
