@@ -1,6 +1,9 @@
 global on_hook_asm
 global spin_lock
 global spin_unlock
+global _on_hook_asm
+global _spin_lock
+global _spin_unlock
 
 ;section .data
 ;align 16
@@ -15,6 +18,7 @@ section .text
 
 ; TODO a better form of synchronization
 spin_lock:
+_spin_lock:
 	mov 	eax, 1 			; Set the EAX register to 1.
 
 	xchg    eax, [-1]		; Atomically swap the EAX register with
@@ -28,7 +32,7 @@ spin_lock:
 							;  we just locked it.
 							; Otherwise, EAX is 1 and we didn't acquire the lock.
 
-	jnz		spin_lock 		; Jump back to the MOV instruction if the Zero Flag is
+	jnz		_spin_lock 		; Jump back to the MOV instruction if the Zero Flag is
 							;  not set; the lock was previously locked, and so
 							; we need to spin until it becomes unlocked.
 
@@ -36,6 +40,7 @@ spin_lock:
 							;  function.
 
 spin_unlock:
+_spin_unlock:
 	mov 	eax, 0 			; Set the EAX register to 0.
 
 	xchg    eax, [-1]		; Atomically swap the EAX register with
@@ -44,6 +49,7 @@ spin_unlock:
 	ret						; The lock has been released.
 
 on_hook_asm:
+_on_hook_asm:
 	;int 3
 
 	push esp
@@ -56,7 +62,7 @@ on_hook_asm:
 	push ebp
 	pushfd
 
-	call spin_lock
+	call _spin_lock
 	fsave [-1]
 
 	push esp
@@ -64,7 +70,7 @@ on_hook_asm:
 	add esp, 4
 
 	frstor [-1]
-	call spin_unlock
+	call _spin_unlock
 
 	popfd
 	pop ebp

@@ -52,23 +52,26 @@ class Memory:
         Mapping = namedtuple('Mapping', ['start', 'end', 'perms', 'offset', 'dev', 'inode', 'pathname'])
         self.mappings = []
         self.modules = {}
-        with open('/proc/self/maps') as f:
-            for l in f.readlines():
-                data = re.split('\s+', l)
-                #print(data)
-                data += [''] * (6-len(data))
-                addr = data[0].split('-')
-                mem = Mapping(
-                    int(addr[0], 16),
-                    int(addr[1], 16),
-                    data[1],
-                    int(data[2], 16),
-                    data[3],
-                    int(data[4]),
-                    data[5])
-                if mem.pathname and os.path.exists(mem.pathname):
-                    self.modules[os.path.basename(mem.pathname)] = mem
-                self.mappings.append(mem)
+        try:
+            with open('/proc/self/maps') as f:
+                for l in f.readlines():
+                    data = re.split('\s+', l)
+                    #print(data)
+                    data += [''] * (6-len(data))
+                    addr = data[0].split('-')
+                    mem = Mapping(
+                        int(addr[0], 16),
+                        int(addr[1], 16),
+                        data[1],
+                        int(data[2], 16),
+                        data[3],
+                        int(data[4]),
+                        data[5])
+                    if mem.pathname and os.path.exists(mem.pathname):
+                        self.modules[os.path.basename(mem.pathname)] = mem
+                    self.mappings.append(mem)
+        except Exception as e:
+            print(e)
 
     def search_map(self, bytes, mem, reload_maps=True):
         if reload_maps:

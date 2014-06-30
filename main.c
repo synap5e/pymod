@@ -20,10 +20,15 @@ nasm -f win64 -shared trampoline_perilogue_64.asm -o trampoline_perilogue_64.obj
 x86_64-w64-mingw32-gcc -I/usr/x86_64-w64-mingw32/include/python34/ -std=c11 -masm=intel -shared main.c -c -o main.o
 x86_64-w64-mingw32-cc /usr/x86_64-w64-mingw32/lib/libpython34.dll.a trampoline_perilogue_64.obj main.o -lpython34 -shared -o mod_win64.dll
 
-win32: (not working)
+win32:
 nasm -f win32 -shared trampoline_perilogue_32.asm -o trampoline_perilogue_32.obj
 i686-w64-mingw32-gcc -I/usr/i686-w64-mingw32/include/python34/ -std=c11 -masm=intel -shared main.c -c -o main.o
 i686-w64-mingw32-cc /usr/i686-w64-mingw32/lib/libpython34.dll.a trampoline_perilogue_32.obj main.o -lpython34 -shared -o mod_win32.dll
+
+or (on windows with mingw64 installed) - the object file can be created with nasm on linux
+gcc -IC:\Python34\include main.c -std=c11 -c -o main.o
+gcc -Xlinker main.o trampoline_perilogue_32.obj C:\Python34\libs\libpython34.a -shared -static-libgcc -o mod_win32.dll
+
 
 */
 
@@ -34,6 +39,7 @@ i686-w64-mingw32-cc /usr/i686-w64-mingw32/lib/libpython34.dll.a trampoline_peril
 #include <stdlib.h>
 #include <sys/time.h>
 #include "trampoline_perilogue.h"
+#include <stdint.h>
 
 #ifndef __MINGW32__
 
@@ -49,14 +55,23 @@ i686-w64-mingw32-cc /usr/i686-w64-mingw32/lib/libpython34.dll.a trampoline_peril
 #define PROT_WRITE 2
 #define PROT_EXEC 4
 int mprotect(void *addr, size_t len, int prot){
-
+	DWORD dwOldProtect;
+	if (prot == PROT_READ | PROT_WRITE | PROT_EXEC){
+		VirtualProtect(addr, len, PAGE_EXECUTE_READWRITE, &dwOldProtect);
+	} else if (prot == PROT_READ | PROT_EXEC){
+		VirtualProtect(addr, len, PAGE_EXECUTE_READ, &dwOldProtect);
+	} else {
+		printf("Memory flag %d not supported\n", prot);
+		return 1;
+	}
+	return 0;
 }
 void *aligned_alloc(size_t alignment, size_t size){
-
+	return malloc(size);
 }
 #define _SC_PAGESIZE 0
 long sysconf(int name){
-
+	return 1;
 }
 
 #endif
@@ -273,29 +288,32 @@ void patch(){
 		printf("No path!\n");
 		sys_path = PyList_New(0);
 		PySys_SetObject("path",sys_path);
-		if (ppath){
-			printf("Adding %s to path!\n", ppath);
-			PyList_Insert(sys_path, 0, PyUnicode_FromString(ppath));
-			strcat(ppath, "\\python.zip");
-			printf("Adding %s to path!\n", ppath);
-			PyList_Insert(sys_path, 0, PyUnicode_FromString(ppath));
-		} else {
-			printf("Aborting\n");
-			exit(-1);
-		}
+	}
+	if (ppath){
+		printf("Adding %s to path!\n", ppath);
+		PyList_Insert(sys_path, 0, PyUnicode_FromString(ppath));
+		strcat(ppath, "\\python.zip");
+		printf("Adding %s to path!\n", ppath);
+		PyList_Insert(sys_path, 0, PyUnicode_FromString(ppath));
 	}
 	PyList_Insert(sys_path, 0, PyUnicode_FromString("."));
 
 
-	hooks_module = PyImport_ImportModule("main");
-	PyErr_Print();
 	internal_module = PyImport_ImportModule("hook_internals");
+	if (!internal_module){
+		printf("Could not find hook_internals\n");
+		goto fail;
+	}
+	hooks_module = PyImport_ImportModule("main");
 	PyErr_Print();
 	replaced_code_dict = PyDict_New();
 	if (!hooks_module || !internal_module | !replaced_code_dict) goto fail;
 
 	hooks_dict = PyObject_GetAttrString(hooks_module, "hooks");
-	if (!hooks_dict) goto fail;
+	if (!hooks_dict){
+		printf("No hooks in main module\n");
+		goto fail;
+	}
 
 	if (PyCallable_Check(hooks_dict)){
 		hooks_dict = PyObject_CallObject(hooks_dict, NULL);

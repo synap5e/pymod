@@ -15,9 +15,13 @@ char* bar(){
 
 char* baz = "World";
 
+/*#include <windows.h>*/
+
 int main(){
 	int i,y;
-	open(0xbadf00d, 0, 0);
+	open((const char*)0xbadf00d, 0, 0);
+	//LoadLibraryA(TEXT("mod_win32.dll"));
+
 	printf("%d\n", foo());
 
 	char *n = malloc(32);
