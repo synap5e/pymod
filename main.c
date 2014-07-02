@@ -26,8 +26,7 @@ i686-w64-mingw32-gcc -I/usr/i686-w64-mingw32/include/python34/ -std=c11 -masm=in
 i686-w64-mingw32-cc /usr/i686-w64-mingw32/lib/libpython34.dll.a trampoline_perilogue_32.obj main.o -lpython34 -shared -o mod_win32.dll
 
 or (on windows with mingw64 installed) - the object file can be created with nasm on linux
-gcc -IC:\Python34\include main.c -std=c11 -c -o main.o
-gcc -Xlinker main.o trampoline_perilogue_32.obj C:\Python34\libs\libpython34.a -shared -static-libgcc -o mod_win32.dll
+gcc -IC:\Python34\include -std=c11 main.c trampoline_perilogue_32.obj C:\Python34\libs\libpython34.a -shared -static -o mod_win32.dll
 
 
 */
@@ -50,6 +49,7 @@ gcc -Xlinker main.o trampoline_perilogue_32.obj C:\Python34\libs\libpython34.a -
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <fcntl.h>
 
 #define PROT_READ 1
 #define PROT_WRITE 2
@@ -73,6 +73,9 @@ void *aligned_alloc(size_t alignment, size_t size){
 long sysconf(int name){
 	return 1;
 }
+
+#undef PyObject_Print
+#define PyObject_Print(x,y,z) puts("PyObject_Print TODO");
 
 #endif
 
@@ -272,9 +275,8 @@ void fix_asm(){
 	text_copy((void*)(*on_hook_asm + 85+3), &replaced_code_ptr, 4);
 }
 #endif
-void patch(){
-	printf("I have successfully infiltrated the process!\n");
-	fix_asm();
+
+int init_python(){
 
 	#ifdef __MINGW32__
 	Py_NoSiteFlag=1;
@@ -282,6 +284,10 @@ void patch(){
 	#endif
 	Py_SetProgramName(L"pymod");
 	Py_InitializeEx(0);
+
+	#ifdef __MINGW32__
+	PyImport_ImportModule("c_stdout");
+	#endif
 
 	PyObject *sys_path = PySys_GetObject("path");
 	if (sys_path == NULL || !PyList_Check(sys_path)) {
@@ -302,17 +308,19 @@ void patch(){
 	internal_module = PyImport_ImportModule("hook_internals");
 	if (!internal_module){
 		printf("Could not find hook_internals\n");
-		goto fail;
+		return 1;
 	}
 	hooks_module = PyImport_ImportModule("main");
 	PyErr_Print();
 	replaced_code_dict = PyDict_New();
-	if (!hooks_module || !internal_module | !replaced_code_dict) goto fail;
+	if (!hooks_module || !internal_module | !replaced_code_dict){
+		return 2;
+	}
 
 	hooks_dict = PyObject_GetAttrString(hooks_module, "hooks");
 	if (!hooks_dict){
 		printf("No hooks in main module\n");
-		goto fail;
+		return 3;
 	}
 
 	if (PyCallable_Check(hooks_dict)){
@@ -321,6 +329,80 @@ void patch(){
 	}
 	if (!hooks_dict || !PyDict_Check(hooks_dict)){
 		printf("Need a dictionary or function that returns a dictionary\n");
+		return 4;
+	}
+
+	return 0;
+}
+
+void create_hook(PyObject *key, PyObject *val, void **saved_called_from_ptr, void** on_hook_asm_ptr){
+
+	uintptr_t addr = PyLong_AsUintptr_t(key);
+
+	if (PyTuple_Size(val)<2 || !PyIndex_Check(PyTuple_GetItem(val, 0)) || !PyCallable_Check(PyTuple_GetItem(val, 1))) {
+		printf("Ignoring hook at 0x%08x as it does not specify an end address and a function\n", addr);
+	}
+
+	uintptr_t endadr = PyLong_AsUintptr_t(PyTuple_GetItem(val, 0));
+	uintptr_t ilen = endadr-addr;
+
+	PyObject *func = PyTuple_GetItem(val, 1);
+
+	#ifdef TARGET_32_BIT
+	if (ilen < 6){
+	#else
+	if (ilen < 7){
+	#endif
+		printf("There is not enough space between 0x%08x and 0x%08x to inject a call. At least 6 bytes are needed on 32bit and 7 bytes on 64bit\n", addr, endadr);
+		return;
+	}
+
+	printf("Injecting hook at 0x%08x to call ", addr);
+	PyObject_Print(val, stdout, 0);
+	putchar('\n');
+
+
+	if (page==0)page = sysconf(_SC_PAGESIZE);
+	void* replaced = aligned_alloc(page, (ilen + 8) + page - ((ilen + 8) % page));
+	memcpy(replaced, (void*)addr, ilen);
+	#ifdef TARGET_32_BIT
+	memcpy(replaced+ilen, "\xff\x25", 2); // jmp dword ptr
+	memcpy(replaced+ilen+2, saved_called_from_ptr, 4); // [called_from]
+	#else
+	memcpy(replaced+ilen, "\xff\x24\x25", 3); // jmp qword ptr
+	memcpy(replaced+ilen+3, saved_called_from_ptr, 8); // [called_from]
+	#endif
+	mprotect(replaced, ilen+1, PROT_READ | PROT_EXEC);
+
+	PyObject *list = PyList_New(3);
+	PyList_SetItem(list, 0, PyLong_FromVoidPtr((void*)replaced));
+	if (PyTuple_Size(val) == 3 && PyLong_Check(PyTuple_GetItem(val, 2))) {
+		PyList_SetItem(list, 1, PyTuple_GetItem(val, 2));
+	} else {
+		PyList_SetItem(list, 1, PyLong_FromLong(1));
+	}
+	PyList_SetItem(list, 2, PyLong_FromLong(0));
+	PyDict_SetItem(replaced_code_dict, PyLong_FromVoidPtr((void*)addr), list);
+
+
+	void *new_call = malloc(ilen);
+	#ifdef TARGET_32_BIT
+	memcpy(new_call, "\xff\x15", 2); // call dword ptr
+	memcpy(new_call+2, &on_hook_asm_ptr, 4); // [on_hook_asm_ptr]
+	memset(new_call+6, 0x90, ilen-6); // nop
+	#else
+	memcpy(new_call, "\xff\x14\x25", 3); // call qword ptr
+	memcpy(new_call+3, &on_hook_asm_ptr, 4); // [on_hook_asm_ptr]
+	memset(new_call+7, 0x90, ilen-7); // nop
+	#endif
+	text_copy((void*)addr, new_call, ilen);
+}
+
+void patch(){
+	printf("I have successfully infiltrated the process!\n");
+	fix_asm();
+
+	if (init_python()){
 		goto fail;
 	}
 
@@ -341,65 +423,7 @@ void patch(){
 			continue;
 		}
 
-		uintptr_t addr = PyLong_AsUintptr_t(key);
-
-		if (PyTuple_Size(val)<2 || !PyIndex_Check(PyTuple_GetItem(val, 0)) || !PyCallable_Check(PyTuple_GetItem(val, 1))) {
-			printf("Ignoring hook at 0x%08x as it does not specify an end address and a function\n", addr);
-		}
-
-		uintptr_t endadr = PyLong_AsUintptr_t(PyTuple_GetItem(val, 0));
-		uintptr_t ilen = endadr-addr;
-
-		PyObject *func = PyTuple_GetItem(val, 1);
-
-		#ifdef TARGET_32_BIT
-		if (ilen < 6){
-		#else
-		if (ilen < 7){
-		#endif
-			printf("There is not enough space between 0x%08x and 0x%08x to inject a call. At least 6 bytes are needed on 32bit and 7 bytes on 64bit\n", addr, endadr);
-			continue;
-		}
-
-		printf("Injecting hook at 0x%08x to call ", addr);
-		PyObject_Print(val, stdout, 0);
-		putchar('\n');
-
-
-		if (page==0)page = sysconf(_SC_PAGESIZE);
-		void* replaced = aligned_alloc(page, (ilen + 8) + page - ((ilen + 8) % page));
-		memcpy(replaced, (void*)addr, ilen);
-		#ifdef TARGET_32_BIT
-		memcpy(replaced+ilen, "\xff\x25", 2); // jmp dword ptr
-		memcpy(replaced+ilen+2, saved_called_from_ptr, 4); // [called_from]
-		#else
-		memcpy(replaced+ilen, "\xff\x24\x25", 3); // jmp qword ptr
-		memcpy(replaced+ilen+3, saved_called_from_ptr, 8); // [called_from]
-		#endif
-		mprotect(replaced, ilen+1, PROT_READ | PROT_EXEC);
-
-		PyObject *list = PyList_New(3);
-		PyList_SetItem(list, 0, PyLong_FromVoidPtr((void*)replaced));
-		if (PyTuple_Size(val) == 3 && PyLong_Check(PyTuple_GetItem(val, 2))) {
-			PyList_SetItem(list, 1, PyTuple_GetItem(val, 2));
-		} else {
-			PyList_SetItem(list, 1, PyLong_FromLong(1));
-		}
-		PyList_SetItem(list, 2, PyLong_FromLong(0));
-		PyDict_SetItem(replaced_code_dict, PyLong_FromVoidPtr((void*)addr), list);
-
-
-		void *new_call = malloc(ilen);
-		#ifdef TARGET_32_BIT
-		memcpy(new_call, "\xff\x15", 2); // call dword ptr
-		memcpy(new_call+2, &on_hook_asm_ptr, 4); // [on_hook_asm_ptr]
-		memset(new_call+6, 0x90, ilen-6); // nop
-		#else
-		memcpy(new_call, "\xff\x14\x25", 3); // call qword ptr
-		memcpy(new_call+3, &on_hook_asm_ptr, 4); // [on_hook_asm_ptr]
-		memset(new_call+7, 0x90, ilen-7); // nop
-		#endif
-		text_copy((void*)addr, new_call, ilen);
+		create_hook(key, val, saved_called_from_ptr, on_hook_asm_ptr);
 
 	}
 	Py_DECREF(keys);
@@ -421,15 +445,73 @@ void patch(){
 
 #ifdef __MINGW32__
 
+void CreateDebugConsole()
+{
+	HANDLE lStdHandle = 0;
+	int hConHandle = 0;
+	FILE *fp = 0;
+	AllocConsole();
+	lStdHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+	hConHandle = _open_osfhandle(PtrToUlong(lStdHandle), _O_TEXT);
+	SetConsoleTitle(L"pymod");
+	SetConsoleTextAttribute(lStdHandle, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+	system("cls");
+	fp = _fdopen(hConHandle, "w");
+	*stdout = *fp;
+	setvbuf(stdout, NULL, _IONBF, 0);
+}
+
+PyObject* c_stdout_write(PyObject* self, PyObject* args){
+    const char *data;
+    if (!PyArg_ParseTuple(args, "s", &data))
+        return NULL;
+    printf("%s", data);
+    return Py_BuildValue("");
+}
+
+PyObject* c_stdout_flush(PyObject* self, PyObject* args){
+    return Py_BuildValue("");
+}
+
+PyMethodDef c_stdout_methods[] = {
+    {"write", c_stdout_write, METH_VARARGS, "write(...)"},
+    {"flush", c_stdout_flush, METH_VARARGS, "flush(...)"},
+    {0, 0, 0, 0}
+};
+
+
+PyModuleDef c_stdout_module = {
+    PyModuleDef_HEAD_INIT,
+    "c_stdout",
+    "doc",
+    -1,
+    c_stdout_methods,
+};
+
+PyMODINIT_FUNC PyInit_c_stdout(void) {
+    PyObject* m = PyModule_Create(&c_stdout_module);
+    PySys_SetObject("stdout", m);
+    PySys_SetObject("stderr", m);
+    return m;
+}
+
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
 {
 	if (ul_reason_for_call == DLL_PROCESS_ATTACH)
 	{
 
+		//CreateDebugConsole();
+
 		LPTSTR temp = (LPTSTR) malloc(MAX_PATH*sizeof(TCHAR));;
 		GetTempPath(MAX_PATH-20, temp);
 		strcat(temp, "pymod");
+		int l = strlen(temp);
 
+		freopen("pymod.log", "w", stdout);
+		setvbuf(stdout, NULL, _IONBF, 0);
+		PyImport_AppendInittab("c_stdout", PyInit_c_stdout);
+
+		*(temp+l)='\0';
 		ppath = malloc(MAX_PATH);
 		strncpy(ppath, temp, MAX_PATH-20);
 
