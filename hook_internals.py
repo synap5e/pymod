@@ -1,8 +1,110 @@
 import ctypes, struct, re, os
-from collections import OrderedDict, namedtuple
+from collections import OrderedDict, namedtuple, defaultdict
 
 is_32bit = struct.calcsize('P') == 4
 is_windows = False
+
+Mapping = namedtuple('Mapping', ['start', 'end', 'perms', 'offset', 'dev', 'inode', 'pathname'])
+CollatedMapping = namedtuple('Mapping', ['start', 'end', 'pathname'])
+
+try:
+    libc = ctypes.cdll.LoadLibrary('libc.so.6')
+    def get_mappings():
+        mems = []
+        with open('/proc/self/maps') as f:
+            for l in f.readlines():
+                data = re.split('\s+', l)
+                #print(data)
+                data += [''] * (6-len(data))
+                addr = data[0].split('-')
+                mems.append(Mapping(
+                    int(addr[0], 16),
+                    int(addr[1], 16),
+                    data[1],
+                    int(data[2], 16),
+                    data[3],
+                    int(data[4]),
+                    data[5]))
+        return mems
+except OSError:
+    is_windows = True
+    libc = ctypes.cdll.LoadLibrary('msvcrt.dll')
+    import ctypes.wintypes
+
+
+    MEM_COMMIT = 0x1000
+    PAGE_GUARD = 0x100
+    PAGE_NOCACHE = 0x200
+    PAGE_READONLY = 0x2
+    PAGE_READWRITE = 0x4
+    PAGE_WRITECOPY = 0x8
+    PAGE_EXECUTE = 0x10
+    PAGE_EXECUTE_READ = 0x20
+    PAGE_EXECUTE_READWRITE = 0x40
+    PAGE_EXECUTE_WRITECOPY = 0x80
+    PAGE_NOACCESS = 0x1
+    MEM_IMAGE = 0x1000000
+    MEM_MAPPED = 0x40000
+    MEM_PRIVATE = 0x20000
+    MAX_PATH = 260
+
+    perms = {
+        PAGE_READONLY: "r---",
+        PAGE_READWRITE: "rw--",
+        PAGE_WRITECOPY: "rw-p",
+        PAGE_EXECUTE: "--x-",
+        PAGE_EXECUTE_READ: "r-x-",
+        PAGE_EXECUTE_READWRITE: "rwx-",
+        PAGE_EXECUTE_WRITECOPY: "rwxp",
+        PAGE_NOACCESS: "----"
+    }
+
+    class MEMORY_BASIC_INFORMATION(ctypes.Structure):
+        _fields_ = [
+                        ("BaseAddress", ctypes.c_void_p),
+                        ("AllocationBase", ctypes.c_void_p),
+                        ("AllocationProtect", ctypes.wintypes.DWORD),
+                        ("RegionSize", ctypes.c_size_t),
+                        ("State", ctypes.wintypes.DWORD),
+                        ("Protect", ctypes.wintypes.DWORD),
+                        ("Type", ctypes.wintypes.DWORD),
+                    ]
+
+        def __str__(self):
+            s = ""
+            s
+
+    def get_mappings():
+        mems = []
+
+        info = MEMORY_BASIC_INFORMATION()
+        module_name = ctypes.create_string_buffer(MAX_PATH)
+        start = 0
+
+        while ctypes.windll.kernel32.VirtualQuery(ctypes.wintypes.LPCVOID(start), ctypes.pointer(info), ctypes.sizeof(info)) == ctypes.sizeof(info):
+            start += info.RegionSize
+            if info.State == MEM_COMMIT:
+                info.AllocationProtect &= ~(PAGE_GUARD | PAGE_NOCACHE)
+                mem_perm = perms[info.AllocationProtect]
+
+                if info.Type == MEM_IMAGE:
+                    ctypes.windll.kernel32.GetModuleFileNameA(info.AllocationBase, ctypes.pointer(module_name), MAX_PATH)
+                    mem_name = str(module_name.value.decode('utf-8'))
+                elif info.Type == MEM_MAPPED:
+                    mem_name = 'memory mapped file'
+                elif info.Type == MEM_PRIVATE:
+                    mem_name = 'private'
+
+                mems.append(Mapping(
+                    info.BaseAddress,
+                    info.BaseAddress+info.RegionSize,
+                    mem_perm,
+                    0,
+                    '00:00',
+                    0,
+                    mem_name))
+        return mems
+
 
 reg32 = ['esp', 'eax', 'ebx', 'ecx', 'edx', 'esi', 'edi', 'ebp', 'eflags']
 reg64 = ['rsp', 'rax', 'rbx', 'rcx', 'rdx', 'rsi', 'rdi', 'rbp', 'r8', 'r9', 'r10', 'r11', 'r12', 'r13', 'r14', 'r15', 'rflags']
@@ -49,29 +151,17 @@ class Memory:
         self.load_mappings()
 
     def load_mappings(self):
-        Mapping = namedtuple('Mapping', ['start', 'end', 'perms', 'offset', 'dev', 'inode', 'pathname'])
         self.mappings = []
         self.modules = {}
-        try:
-            with open('/proc/self/maps') as f:
-                for l in f.readlines():
-                    data = re.split('\s+', l)
-                    #print(data)
-                    data += [''] * (6-len(data))
-                    addr = data[0].split('-')
-                    mem = Mapping(
-                        int(addr[0], 16),
-                        int(addr[1], 16),
-                        data[1],
-                        int(data[2], 16),
-                        data[3],
-                        int(data[4]),
-                        data[5])
-                    if mem.pathname and os.path.exists(mem.pathname):
-                        self.modules[os.path.basename(mem.pathname)] = mem
-                    self.mappings.append(mem)
-        except Exception as e:
-            print(e)
+        for mem in get_mappings():
+            if mem.pathname and os.path.exists(mem.pathname):
+                name = os.path.basename(mem.pathname)
+                if name not in self.modules:
+                    self.modules[name] = CollatedMapping(mem.start, mem.end, mem.pathname)
+                else:
+                    old = self.modules[name]
+                    self.modules[name] = CollatedMapping(min(mem.start, old.start), max(old.end, mem.end), mem.pathname)
+            self.mappings.append(mem)
 
     def search_map(self, bytes, mem, reload_maps=True):
         if reload_maps:
@@ -152,12 +242,9 @@ class Memory:
         return libc.free(addr)
 
 
-try:
-    libc = ctypes.cdll.LoadLibrary('libc.so.6')
-except OSError:
-    is_windows = True
-    libc = ctypes.cdll.LoadLibrary('msvcrt.dll')
-
 memory = Memory()
 
 
+if __name__ == '__main__':
+    import json
+    print(json.dumps(memory.modules, indent=True))
