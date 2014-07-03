@@ -307,15 +307,16 @@ int init_python(){
 
 	internal_module = PyImport_ImportModule("hook_internals");
 	if (!internal_module){
-		printf("Could not find hook_internals\n");
+		printf("Could not find hook_internals.py\n");
 		return 1;
 	}
 	hooks_module = PyImport_ImportModule("main");
-	PyErr_Print();
-	replaced_code_dict = PyDict_New();
-	if (!hooks_module || !internal_module | !replaced_code_dict){
+	if (!internal_module){
+		printf("Could not find main.py\n");
 		return 2;
 	}
+	PyErr_Print();
+	replaced_code_dict = PyDict_New();
 
 	hooks_dict = PyObject_GetAttrString(hooks_module, "hooks");
 	if (!hooks_dict){
@@ -501,22 +502,21 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 	{
 
 		//CreateDebugConsole();
-
-		LPTSTR temp = (LPTSTR) malloc(MAX_PATH*sizeof(TCHAR));;
-		GetTempPath(MAX_PATH-20, temp);
-		strcat(temp, "pymod");
-		int l = strlen(temp);
-
 		freopen("pymod.log", "w", stdout);
 		setvbuf(stdout, NULL, _IONBF, 0);
 		PyImport_AppendInittab("c_stdout", PyInit_c_stdout);
 
-		*(temp+l)='\0';
-		ppath = malloc(MAX_PATH);
-		strncpy(ppath, temp, MAX_PATH-20);
 
-		strcat(temp, "\\python.zip");
-		SetEnvironmentVariable(TEXT("PYTHONPATH"), temp);
+		LPTSTR temp = (LPTSTR) malloc(MAX_PATH+1);;
+		GetTempPath(MAX_PATH-20, temp);
+
+		ppath = malloc(MAX_PATH+1);
+		snprintf(ppath, MAX_PATH, "%spymod_%d\\", temp, GetCurrentProcessId());
+
+		char *pppath = malloc(MAX_PATH+1);
+		snprintf(pppath, MAX_PATH, "%spython.zip", ppath);
+
+		SetEnvironmentVariable("PYTHONPATH", pppath);
 
 		patch();
 	}
