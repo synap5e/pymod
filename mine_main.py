@@ -1,44 +1,40 @@
 import random, ctypes, struct, time
+
+# import the memory object so that we can manipulate the process memory
 from hook_internals import *
 
 r = random.Random()
 
-#import sys
-#sys.stdout = open('py.log', 'w')
-print("start")
-
 class Mod:
+    
     def create_board(self, registers, call):
-        # [something, width, height, mines, seed ]
-        args = list(memory.get(registers.esp+4, '@5i'))
+        """ Replaces the number of mines generated for a board with 0 so that we win straight away """
+        
+        # This hooks directly after the function prelouge for a function that creates the Minesweeper board
+        # the arguments to function are stored on the stack and are [?this?, width, height, mines, seed ]
+        
+        # get the memory address of the arguments - stack pointer + 4
+        argument_location = registers.esp+4
+        
+        # read the 5 signed interger arguments in native byte order from memory
+        args = list(memory.get(argument_location, '@5i'))
+        
         print("create_board(", args, end=')\n')
-        args[3] = -1
+        
+        # change one of the values of the arguments
+        args[3] = 0
+        
+        # and write it back to memory, replacing the passed in arguments to the function with our own
         memory.set(registers.esp+4, args, '@5i')
-        #memory.set(0x407414, (10,), '@i')
-        #       print(registers)
-        #       time.sleep(1)
-
-m = Mod()
 
 def hooks():
-    import json
-    #print(json.dumps(memory.modules, indent=True))
-#   print("test")
-#   print(mod)
-    # mv = 999999999999999
-    # for a in mod:
-    #   if b'minesweeper.exe' in a:
-    #       cv = int(a.split(b'-')[0][2:], 16)
-    #       mv = min(cv, mv)
-
-    # print(mv)
-    # print("%08x" % mv)
+    m = Mod()
+    
+    # the address of where we want to inject our code
+    create_board_function_address = memory.module_base('minesweeper.exe') + 0x20dd4
+    
     return {
-        memory.module_base('minesweeper.exe') + 0x20dd4: (memory.module_base('minesweeper.exe') + 0x20dd4+7, m.create_board, 1)
+        create_board_function_address : create_board_function_address+7, m.create_board, 1)
     }
 
-
-# 006A0DD4  /$ 6A 04          PUSH 4
-
-# 00440DD4  /$ 6A 04          PUSH 4
 
